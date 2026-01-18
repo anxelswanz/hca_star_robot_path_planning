@@ -14,19 +14,6 @@ class Simulation:
         self.astar = AStar()
         self.reserved_position = {}
 
-    def display(self):
-        print("\n" + "=" * 20)
-        for y in range(0, self.size):
-            line = ""
-            for x in range(0, self.size):
-                pos = (x, y)
-                if [x, y] == self.robots['A']:
-                    line += "A "
-                elif [x, y] == self.robots['B']:
-                    line += "B "
-                else: line += "+ "
-            print(line)
-
     def _reserve_path(self, path, rid, max_horizon=100):
         """
         将给定路径记录到时空资源表（reserved_position 和 reserved_edges）中
@@ -69,6 +56,8 @@ class Simulation:
             # 默认起点是机器人的当前位置
             current_start = tuple(robot.pos)
 
+            #清理之前的路径
+            self._clear_robot_reservations(rid)
             # 处理冲突：如果我是高优先级，这一步可能会给低优先级机器人分配避让路径并预留资源
             self._handle_goal_conflict(rid, targets[rid], planned_paths)
 
@@ -135,17 +124,17 @@ class Simulation:
 
     def _clear_robot_reservations(self, rid):
         # 清除位置预约
-        for t in list(self.reserved_position[rid].keys()):
+        for t in list(self.reserved_position.keys()):
             # 过滤掉属于该 rid 的坐标
             self.reserved_position[t] = {
                 pos: r for pos, r in self.reserved_position[t].items() if r != rid
             }
 
-        if not self.reserved_position[t]:
-            del self.reserved_position[t]
+            if not self.reserved_position[t]:
+                del self.reserved_position[t]
 
         # 清除边预约
-        for t in list(self.reserved_edges[rid].keys()):
+        for t in list(self.reserved_edges.keys()):
             self.reserved_edges[t] = {
                 edge: r for edge, r in self.reserved_edges[t].items() if r != rid
             }
