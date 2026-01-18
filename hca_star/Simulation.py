@@ -1,5 +1,5 @@
 import time
-from Robot import Robot
+from Robot import Robot, RobotState
 from AStar import AStar
 
 
@@ -8,7 +8,7 @@ class Simulation:
         self.size = 8
         self.obstacles = set()
         self.robots = [
-            Robot('A', [0, 0], priority=10),
+            Robot('A', [0, 0], priority=2),
             Robot('B', [7, 7], priority=5)
         ]
         self.astar = AStar()
@@ -44,6 +44,14 @@ class Simulation:
         self.reserved_edges = {}
         planned_paths = {}
 
+        #将刮起任务和新任务合并
+        targets = self.get_all_active_tasks(targets)
+        print("targets:", targets)
+        #预处理：更新所有收到新指令的机器人目标和状态
+        for rid, target in targets.items():
+            robot = next(r for r in self.robots if r.rid == rid)
+            robot.target = target
+            robot.status = RobotState.WORKING
 
         sorted_robots = sorted(self.robots, key=lambda r: r.priority, reverse=True)
 
@@ -51,6 +59,9 @@ class Simulation:
             rid = robot.rid  # 假设 Robot 类有 id 属性
             if rid not in targets: continue
 
+            # 允许 WORKING 和 PENDING 参与规划
+            if robot.status == RobotState.IDLE or robot.target is None:
+                continue
 
             goal = targets[rid]
             # 默认起点是机器人的当前位置
@@ -59,7 +70,8 @@ class Simulation:
             #清理之前的路径
             self._clear_robot_reservations(rid)
             # 处理冲突：如果我是高优先级，这一步可能会给低优先级机器人分配避让路径并预留资源
-            self._handle_goal_conflict(rid, targets[rid], planned_paths)
+            if not self._handle_goal_conflict(rid, targets[rid], planned_paths):
+                continue
 
             # 检查这个机器人是否已经有了路径（比如刚刚被高优先级机器人踢走的避让路径）
             existing_path = planned_paths.get(rid, [])
@@ -118,9 +130,27 @@ class Simulation:
                     self._reserve_path(b_path, conflict_robot.rid)
             return True
         else:
-            #TODO 监听补位
-            return True
-        return 1
+            # 如果当前机器人priority小, 那么这里的逻辑为
+            # a依然规划路径，但在到达目标点前的最后一个“安全位”停下，并持续监听目标点的状态。一旦 b 任务结束离开，a 立即补位。
+            # --- 低优先级：在这里直接规划“蹲点”路径 ---
+            print(f"[调度] {rid} 优先级低，正在寻找目标点 {goal} 附近的排队位...")
+            robot.status = RobotState.PENDING
+
+            # 1. 把目标点设为障碍，找最近的“安全排队位”
+            forbidden = self.obstacles.copy()
+            forbidden.add(goal)
+
+            wait_pos = self._find_nearest_safe_pos(goal, forbidden)
+            if wait_pos:
+                # 2. 直接在这里规划去排队位的路径
+                wait_path = self.astar.get_path(tuple(robot.pos), wait_pos,
+                                                self.obstacles, self.reserved_position, self.reserved_edges)
+                if wait_path:
+                    planned_paths[rid] = wait_path
+                    self._reserve_path(wait_path, rid)
+                    print(f"[调度] {rid} 已规划至排队点 {wait_pos}")
+            return False
+
 
     def _clear_robot_reservations(self, rid):
         # 清除位置预约
@@ -212,8 +242,30 @@ class Simulation:
                         # 更新机器人对象的位置属性
                         robot.pos = list(path[t])
             self.display()
-            time.sleep(0.5)
+            time.sleep(0.1)
+        # 【重点】整个执行循环结束后，检查谁到站了
+        for robot in self.robots:
+            if robot.target and tuple(robot.pos) == tuple(robot.target):
+                print(f"Robot {robot.rid} 到达终点，释放资源。")
+                robot.status = RobotState.IDLE
+                robot.target = None
+                self._clear_robot_reservations(robot.rid)
 
+
+    def get_all_active_tasks(self, new_targets):
+        """
+        将用户输入的新任务和系统中现有的挂起任务合并
+        """
+        combined_targets = new_targets.copy()
+
+        for robot in self.robots:
+            # 如果机器人正在排队，且我们这轮没有给它下达新指令
+            if robot.status == RobotState.PENDING and robot.rid not in combined_targets:
+                if robot.target:
+                    combined_targets[robot.rid] = robot.target
+                    print(f"[监听] 机器人 {robot.rid} 仍在等待补位，尝试重新规划其目标点 {robot.target}")
+
+        return combined_targets
 
 if __name__ == "__main__":
     sim = Simulation()
